@@ -41,7 +41,7 @@ model = TextSentiment(VOCAB_SIZE, EMBED_DIM, NUM_CLASS).to(device)
 
 
 try:
-    model = torch.load("topic_classifier_model")
+    model = torch.load("topic_classifier_model", map_location=torch.device('cpu'))
 except Exception as e:
     print(e)
 
