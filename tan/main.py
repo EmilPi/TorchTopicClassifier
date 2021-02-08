@@ -38,10 +38,46 @@ VOCAB_SIZE = len(train_dataset.get_vocab())
 EMBED_DIM = 32
 NUM_CLASS = len(train_dataset.get_labels())
 model = TextSentiment(VOCAB_SIZE, EMBED_DIM, NUM_CLASS).to(device)
+
+
 try:
     model = torch.load("topic_classifier_model")
 except Exception as e:
     print(e)
+
+from sys import argv
+
+
+def prepare_text_for_tokenizing(text):
+    text = text.lower().replace('.', ' .')
+    while '  ' in text:
+        text = text.replace('  ', ' ')
+    return text
+
+
+def text2inds(text):
+    text = prepare_text_for_tokenizing(text)
+    return [ws2inds.index(w) if w in ws2inds else ws2inds.index('<unk>') for w in text.lower().split()]
+
+
+def text2offsets(text_vecs):
+    return [0] + [len(text_vecs)]
+text = ' '.join(argv[1:])
+if text != '':
+    ws2inds = train_dataset.get_vocab().itos
+
+    # while True:
+    text = input('Enter a text to classify (ENTER to exit): ')
+    # if text == '':
+    #     break
+    # headline = input('Enter headline: ')
+    # headline_vecs = text2inds(headline)
+    text_vecs_list = text2inds(text)
+    text_offsets_list = text2offsets(text_vecs_list)
+
+    text_offsets = torch.tensor(text_offsets_list[:-1]).cumsum(dim=0).to(device)
+    text_vecs = torch.tensor(text_vecs_list).to(device)
+    print(model(text_vecs, text_offsets))
 
 def generate_batch(batch):
     label = torch.tensor([entry[0] for entry in batch])
@@ -95,7 +131,7 @@ def test(data_):
 
 import time
 from torch.utils.data.dataset import random_split
-N_EPOCHS = 10
+N_EPOCHS = 0
 min_valid_loss = float('inf')
 
 criterion = torch.nn.CrossEntropyLoss().to(device)
@@ -122,28 +158,3 @@ for epoch in range(N_EPOCHS):
 
 torch.save(model, "topic_classifier_model")
 
-ws2inds = train_dataset.get_vocab().itos
-
-def prepare_text_for_tokenizing(text):
-    text = text.lower().replace('.', ' .')
-    while '  ' in text:
-        text = text.replace('  ', ' ')
-    return text
-def text2inds(text):
-    text = prepare_text_for_tokenizing(text)
-    return [ws2inds.index(w) if w in ws2inds else ws2inds.index('<unk>') for w in text.lower().split()]
-def text2offsets(text_vecs):
-    return [0] + [len(text_vecs)]
-
-while True:
-    text = input('Enter a text to classify (ENTER to exit): ')
-    if text == '':
-        break
-    # headline = input('Enter headline: ')
-    # headline_vecs = text2inds(headline)
-    text_vecs_list = text2inds(text)
-    text_offsets_list = text2offsets(text_vecs_list)
-
-    text_offsets = torch.tensor(text_offsets_list[:-1]).cumsum(dim=0).to(device)
-    text_vecs = torch.tensor(text_vecs_list).to(device)
-    print( model(text_vecs, text_offsets) )
