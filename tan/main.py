@@ -1,19 +1,31 @@
 # https://pytorch.org/tutorials/beginner/text_sentiment_ngrams_tutorial.html
-import torch
-# import torchtext
-from torchtext.datasets import text_classification
-NGRAMS = 2
+import json
 import os
-if not os.path.isdir('./.data'):
-    os.mkdir('./.data')
-train_dataset, test_dataset = text_classification.DATASETS['AG_NEWS'](
-    root='./.data', ngrams=NGRAMS, vocab=None)
-BATCH_SIZE = 64
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print('Will run on %s' % device)
+import time
+from sys import argv
 
+import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from torch.utils.data.dataset import random_split
+from torchtext.datasets import text_classification
+
+NGRAMS = 2
+BATCH_SIZE = 64
+
+EMBED_DIM = 32
+
+
+def load_dataset():
+    if not os.path.isdir('./.data'):
+        os.mkdir('./.data')
+    train_dataset, test_dataset = text_classification.DATASETS['AG_NEWS'](
+        root='./.data', ngrams=NGRAMS, vocab=None)
+    ws2inds = train_dataset.get_vocab().itos
+
+    return train_dataset, test_dataset, ws2inds
+
+
 class TextSentiment(nn.Module):
     def __init__(self, vocab_size, embed_dim, num_class):
         super().__init__()
@@ -29,55 +41,10 @@ class TextSentiment(nn.Module):
         self.fc.bias.data.zero_()
 
     def forward(self, text, offsets):
-        # print(text, offsets, 'Text, Offsets')
         embedded = self.embedding(text, offsets)
         dropped_embedded = self.dropout(embedded)
         return self.fc(dropped_embedded)
 
-VOCAB_SIZE = len(train_dataset.get_vocab())
-EMBED_DIM = 32
-NUM_CLASS = len(train_dataset.get_labels())
-model = TextSentiment(VOCAB_SIZE, EMBED_DIM, NUM_CLASS).to(device)
-
-
-try:
-    model = torch.load("topic_classifier_model", map_location=torch.device('cpu'))
-except Exception as e:
-    print(e)
-
-from sys import argv
-
-
-def prepare_text_for_tokenizing(text):
-    text = text.lower().replace('.', ' .')
-    while '  ' in text:
-        text = text.replace('  ', ' ')
-    return text
-
-
-def text2inds(text):
-    text = prepare_text_for_tokenizing(text)
-    return [ws2inds.index(w) if w in ws2inds else ws2inds.index('<unk>') for w in text.lower().split()]
-
-
-def text2offsets(text_vecs):
-    return [0] + [len(text_vecs)]
-text = ' '.join(argv[1:])
-if text != '':
-    ws2inds = train_dataset.get_vocab().itos
-
-    # while True:
-    text = input('Enter a text to classify (ENTER to exit): ')
-    # if text == '':
-    #     break
-    # headline = input('Enter headline: ')
-    # headline_vecs = text2inds(headline)
-    text_vecs_list = text2inds(text)
-    text_offsets_list = text2offsets(text_vecs_list)
-
-    text_offsets = torch.tensor(text_offsets_list[:-1]).cumsum(dim=0).to(device)
-    text_vecs = torch.tensor(text_vecs_list).to(device)
-    print(model(text_vecs, text_offsets))
 
 def generate_batch(batch):
     label = torch.tensor([entry[0] for entry in batch])
@@ -91,10 +58,8 @@ def generate_batch(batch):
     text = torch.cat(text)
     return text, offsets, label
 
-from torch.utils.data import DataLoader
 
 def train_func(sub_train_):
-
     # Train the model
     train_loss = 0
     train_acc = 0
@@ -115,6 +80,7 @@ def train_func(sub_train_):
 
     return train_loss / len(sub_train_), train_acc / len(sub_train_)
 
+
 def test(data_):
     loss = 0
     acc = 0
@@ -129,32 +95,96 @@ def test(data_):
 
     return loss / len(data_), acc / len(data_)
 
-import time
-from torch.utils.data.dataset import random_split
-N_EPOCHS = 0
-min_valid_loss = float('inf')
 
-criterion = torch.nn.CrossEntropyLoss().to(device)
-optimizer = torch.optim.SGD(model.parameters(), lr=4.0)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.9)
+text = ' '.join(argv[1:])
 
-train_len = int(len(train_dataset) * 0.95)
-sub_train_, sub_valid_ = \
-    random_split(train_dataset, [train_len, len(train_dataset) - train_len])
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print('Will run on %s' % device)
 
-for epoch in range(N_EPOCHS):
+ws2inds = None
+try:
+    model = torch.load("topic_classifier_model", map_location=device)
+    data = json.load(open('topic_classifier_vocabulary', 'r', encoding='utf-8'))
+    ws2inds = data['ws2inds'].splitlines()
+    VOCAB_SIZE = data['VOCAB_SIZE']
+    EMBED_DIM = data['EMBED_DIM']
+    NUM_CLASS = data['NUM_CLASS']
 
-    start_time = time.time()
-    train_loss, train_acc = train_func(sub_train_)
-    valid_loss, valid_acc = test(sub_valid_)
+except Exception as e:
+    print(e)
+    train_dataset, test_dataset, ws2inds = load_dataset()
 
-    secs = int(time.time() - start_time)
-    mins = secs / 60
-    secs = secs % 60
+    VOCAB_SIZE = len(train_dataset.get_vocab())
+    NUM_CLASS = len(train_dataset.get_labels())
 
-    print('Epoch: %d' %(epoch + 1), " | time in %d minutes, %d seconds" %(mins, secs))
-    print(f'\tLoss: {train_loss:.4f}(train)\t|\tAcc: {train_acc * 100:.1f}%(train)')
-    print(f'\tLoss: {valid_loss:.4f}(valid)\t|\tAcc: {valid_acc * 100:.1f}%(valid)')
+    model = TextSentiment(VOCAB_SIZE, EMBED_DIM, NUM_CLASS).to(device)
+    try:
+        model = torch.load("topic_classifier_model", map_location=device)
+    except Exception as e:
+        print(e)
 
-torch.save(model, "topic_classifier_model")
+if text != '':
+    def prepare_text_for_tokenizing(text):
+        text = text.lower().replace('.', ' .')
+        while '  ' in text:
+            text = text.replace('  ', ' ')
+        return text
 
+
+    def text2inds(text):
+        text = prepare_text_for_tokenizing(text)
+        return [ws2inds.index(w) if w in ws2inds else ws2inds.index('<unk>') for w in text.lower().split()]
+
+
+    def text2offsets(text_vecs):
+        return [0] + [len(text_vecs)]
+
+    
+    while text != '':
+
+        text_vecs_list = text2inds(text)
+        text_offsets_list = text2offsets(text_vecs_list)
+
+        text_offsets = torch.tensor(text_offsets_list[:-1]).cumsum(dim=0).to(device)
+        text_vecs = torch.tensor(text_vecs_list).to(device)
+        print(model(text_vecs, text_offsets))
+        text = input('Enter a text to classify (ENTER to exit): ')
+    exit()
+
+else:
+    train_dataset, test_dataset, ws2inds = load_dataset()
+
+    N_EPOCHS = 5
+    min_valid_loss = float('inf')
+
+    criterion = torch.nn.CrossEntropyLoss().to(device)
+    optimizer = torch.optim.SGD(model.parameters(), lr=4.0)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.9)
+
+    train_len = int(len(train_dataset) * 0.95)
+    sub_train_, sub_valid_ = \
+        random_split(train_dataset, [train_len, len(train_dataset) - train_len])
+
+    for epoch in range(N_EPOCHS):
+        start_time = time.time()
+        train_loss, train_acc = train_func(sub_train_)
+        valid_loss, valid_acc = test(sub_valid_)
+
+        secs = int(time.time() - start_time)
+        mins = secs / 60
+        secs = secs % 60
+
+        print('Epoch: %d' % (epoch + 1), " | time in %d minutes, %d seconds" % (mins, secs))
+        print(f'\tLoss: {train_loss:.4f}(train)\t|\tAcc: {train_acc * 100:.1f}%(train)')
+        print(f'\tLoss: {valid_loss:.4f}(valid)\t|\tAcc: {valid_acc * 100:.1f}%(valid)')
+
+    torch.save(model, "topic_classifier_model")
+    json.dump(dict(
+        VOCAB_SIZE=VOCAB_SIZE,
+        EMBED_DIM=EMBED_DIM,
+        NUM_CLASS=NUM_CLASS,
+        ws2inds='\n'.join(ws2inds),
+    ),
+        open('topic_classifier_vocabulary', 'w', encoding='utf-8'),
+        ensure_ascii=False,
+    )
